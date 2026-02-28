@@ -59,6 +59,8 @@ In AnythingLLM Desktop, use the OpenAI-compatible provider and configure:
 
 AnythingLLM will call `/models` and `/chat/completions` under this base URL.
 
+The Worker now advertises multiple Workers AI chat models via `/v1/models` (for example `@cf/meta/llama-3.1-70b-instruct`, `@cf/openai/gpt-oss-20b`, `@cf/qwen/qwen3-30b-a3b-fp8`, etc.).
+
 Request body (prompt style):
 
 ```json

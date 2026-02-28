@@ -15,6 +15,20 @@ type Bindings = {
 }
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
+const SUPPORTED_MODELS = [
+  '@cf/meta/llama-3.1-8b-instruct',
+  '@cf/meta/llama-3.1-8b-instruct-fast',
+  '@cf/meta/llama-3.1-70b-instruct',
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  '@cf/meta/llama-3.2-3b-instruct',
+  '@cf/meta/llama-3.2-1b-instruct',
+  '@cf/meta/llama-4-scout-17b-16e-instruct',
+  '@cf/openai/gpt-oss-120b',
+  '@cf/openai/gpt-oss-20b',
+  '@cf/qwen/qwen3-30b-a3b-fp8',
+  '@cf/mistral/mistral-small-3.1-24b-instruct',
+  '@cf/google/gemma-3-12b-it'
+] as const
 type ErrorStatusCode = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -262,14 +276,12 @@ app.get('/', (c) => {
 app.get('/v1/models', (c) => {
   return c.json({
     object: 'list',
-    data: [
-      {
-        id: DEFAULT_MODEL,
-        object: 'model',
-        created: 0,
-        owned_by: 'cloudflare-workers-ai'
-      }
-    ]
+    data: SUPPORTED_MODELS.map((modelId) => ({
+      id: modelId,
+      object: 'model',
+      created: 0,
+      owned_by: 'cloudflare-workers-ai'
+    }))
   })
 })
 
