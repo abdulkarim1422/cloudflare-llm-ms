@@ -11,11 +11,30 @@ type AiBinding = {
 
 type Bindings = {
   AI: AiBinding
+  AUTH_TOKEN: string
 }
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
 
 const app = new Hono<{ Bindings: Bindings }>()
+
+app.use('*', async (c, next) => {
+  const configuredToken = c.env.AUTH_TOKEN
+
+  if (!configuredToken) {
+    return c.json({ error: 'Server is missing AUTH_TOKEN configuration.' }, 500)
+  }
+
+  const authHeader = c.req.header('Authorization')
+  const isBearer = authHeader?.startsWith('Bearer ')
+  const requestToken = isBearer && authHeader ? authHeader.slice(7).trim() : ''
+
+  if (!requestToken || requestToken !== configuredToken) {
+    return c.json({ error: 'Unauthorized' }, 401)
+  }
+
+  await next()
+})
 
 app.get('/', (c) => {
   return c.json({
