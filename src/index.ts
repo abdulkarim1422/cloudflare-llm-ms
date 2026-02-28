@@ -214,6 +214,75 @@ function createOpenAIError(message: string, status: ErrorStatusCode = 400) {
   }
 }
 
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function getUsageFromObject(source: Record<string, unknown>) {
+  const promptTokens =
+    toNumber(source.prompt_tokens) ??
+    toNumber(source.input_tokens) ??
+    toNumber(source.promptTokens) ??
+    toNumber(source.inputTokens)
+
+  const completionTokens =
+    toNumber(source.completion_tokens) ??
+    toNumber(source.output_tokens) ??
+    toNumber(source.completionTokens) ??
+    toNumber(source.outputTokens)
+
+  const totalTokens =
+    toNumber(source.total_tokens) ??
+    toNumber(source.totalTokens) ??
+    (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null)
+
+  const hasAny = promptTokens !== null || completionTokens !== null || totalTokens !== null
+  if (!hasAny) return null
+
+  return {
+    prompt_tokens: promptTokens ?? 0,
+    completion_tokens: completionTokens ?? 0,
+    total_tokens:
+      totalTokens ??
+      (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : 0)
+  }
+}
+
+function extractUsageFromAiResult(result: Record<string, unknown>) {
+  const direct = getUsageFromObject(result)
+  if (direct) return direct
+
+  const directUsage = result.usage
+  if (typeof directUsage === 'object' && directUsage !== null) {
+    const usage = getUsageFromObject(directUsage as Record<string, unknown>)
+    if (usage) return usage
+  }
+
+  const nested = result.result
+  if (typeof nested === 'object' && nested !== null) {
+    const nestedObject = nested as Record<string, unknown>
+    const nestedDirect = getUsageFromObject(nestedObject)
+    if (nestedDirect) return nestedDirect
+
+    const nestedUsage = nestedObject.usage
+    if (typeof nestedUsage === 'object' && nestedUsage !== null) {
+      const usage = getUsageFromObject(nestedUsage as Record<string, unknown>)
+      if (usage) return usage
+    }
+  }
+
+  return {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0
+  }
+}
+
 function extractTextFromAiResult(result: Record<string, unknown>): string {
   if (typeof result.response === 'string') return result.response
 
@@ -369,6 +438,7 @@ app.post('/v1/chat/completions', async (c) => {
 
     const result = await c.env.AI.run(model, { messages })
     const content = extractTextFromAiResult(result)
+    const usage = extractUsageFromAiResult(result)
     const created = Math.floor(Date.now() / 1000)
 
     return c.json({
@@ -386,11 +456,7 @@ app.post('/v1/chat/completions', async (c) => {
           finish_reason: 'stop'
         }
       ],
-      usage: {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0
-      }
+      usage
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Workers AI call failed.'
