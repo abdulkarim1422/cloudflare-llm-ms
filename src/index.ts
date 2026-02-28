@@ -15,10 +15,134 @@ type Bindings = {
 }
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
+type ErrorStatusCode = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500
 
 const app = new Hono<{ Bindings: Bindings }>()
 
-function createOpenAIError(message: string, status = 400) {
+function createChunkPayload(id: string, model: string, content: string | null, finishReason: string | null) {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: content === null ? {} : { content },
+        finish_reason: finishReason
+      }
+    ]
+  }
+}
+
+function sseData(payload: unknown) {
+  return `data: ${JSON.stringify(payload)}\n\n`
+}
+
+function extractTextCandidates(value: unknown): string[] {
+  if (typeof value === 'string') {
+    const text = value.trim()
+    return text ? [text] : []
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => extractTextCandidates(item))
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    const item = value as Record<string, unknown>
+    const keys = ['response', 'text', 'content', 'delta', 'output_text']
+    const results = keys.flatMap((key) => extractTextCandidates(item[key]))
+    if (results.length > 0) return results
+  }
+
+  return []
+}
+
+async function toOpenAiSseFromAiStream(params: {
+  aiStream: ReadableStream
+  id: string
+  model: string
+}): Promise<ReadableStream> {
+  const { aiStream, id, model } = params
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  const reader = aiStream.getReader()
+
+  return new ReadableStream({
+    async start(controller) {
+      let buffer = ''
+
+      const emitContent = (text: string) => {
+        if (!text) return
+        controller.enqueue(encoder.encode(sseData(createChunkPayload(id, model, text, null))))
+      }
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          if (typeof value === 'string') {
+            emitContent(value)
+            continue
+          }
+
+          buffer += decoder.decode(value as Uint8Array, { stream: true })
+          const parts = buffer.split(/\r?\n\r?\n/)
+          buffer = parts.pop() ?? ''
+
+          for (const part of parts) {
+            const lines = part
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => line.startsWith('data:'))
+
+            if (lines.length === 0) {
+              const fallbacks = extractTextCandidates(part)
+              fallbacks.forEach(emitContent)
+              continue
+            }
+
+            for (const line of lines) {
+              const raw = line.slice(5).trim()
+              if (!raw || raw === '[DONE]') continue
+
+              try {
+                const parsed = JSON.parse(raw) as unknown
+                const texts = extractTextCandidates(parsed)
+                if (texts.length > 0) {
+                  texts.forEach(emitContent)
+                } else {
+                  emitContent(raw)
+                }
+              } catch {
+                emitContent(raw)
+              }
+            }
+          }
+        }
+
+        if (buffer.trim()) {
+          const texts = extractTextCandidates(buffer)
+          if (texts.length > 0) {
+            texts.forEach(emitContent)
+          }
+        }
+
+        controller.enqueue(encoder.encode(sseData(createChunkPayload(id, model, null, 'stop'))))
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      } finally {
+        reader.releaseLock()
+      }
+    }
+  })
+}
+
+function createOpenAIError(message: string, status: ErrorStatusCode = 400) {
   return {
     status,
     body: {
@@ -125,11 +249,7 @@ app.post('/v1/chat/completions', async (c) => {
 
   const model = body.model ?? DEFAULT_MODEL
   const messages = Array.isArray(body.messages) ? body.messages : []
-
-  if (body.stream) {
-    const error = createOpenAIError('Streaming is not enabled on this endpoint.')
-    return c.json(error.body, error.status)
-  }
+  const requestId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
   if (messages.length === 0) {
     const error = createOpenAIError('`messages` must be a non-empty array.')
@@ -146,10 +266,54 @@ app.post('/v1/chat/completions', async (c) => {
   }
 
   try {
+    if (body.stream) {
+      const streamedResult = await c.env.AI.run(model, { messages, stream: true })
+
+      let aiStream: ReadableStream | null = null
+      if (streamedResult instanceof ReadableStream) {
+        aiStream = streamedResult
+      } else if (
+        typeof streamedResult === 'object' &&
+        streamedResult !== null &&
+        (streamedResult as Record<string, unknown>).response instanceof ReadableStream
+      ) {
+        aiStream = (streamedResult as { response: ReadableStream }).response
+      }
+
+      if (!aiStream) {
+        const fallbackText = extractTextFromAiResult(streamedResult)
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(sseData(createChunkPayload(requestId, model, fallbackText, null))))
+            controller.enqueue(encoder.encode(sseData(createChunkPayload(requestId, model, null, 'stop'))))
+            controller.enqueue(encoder.encode('data: [DONE]\\n\\n'))
+            controller.close()
+          }
+        })
+
+        return new Response(stream, {
+          headers: {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive'
+          }
+        })
+      }
+
+      const openAiStream = await toOpenAiSseFromAiStream({ aiStream, id: requestId, model })
+      return new Response(openAiStream, {
+        headers: {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive'
+        }
+      })
+    }
+
     const result = await c.env.AI.run(model, { messages })
     const content = extractTextFromAiResult(result)
     const created = Math.floor(Date.now() / 1000)
-    const requestId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
     return c.json({
       id: requestId,

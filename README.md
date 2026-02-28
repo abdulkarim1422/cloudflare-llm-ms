@@ -89,8 +89,18 @@ curl -X POST http://127.0.0.1:8787/v1/chat/completions \
 	-d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
 ```
 
+Example streaming curl (`stream: true`):
+
+```txt
+curl -N -X POST http://127.0.0.1:8787/v1/chat/completions \
+	-H 'authorization: Bearer your-local-token' \
+	-H 'content-type: application/json' \
+	-d '{"model":"@cf/meta/llama-3.1-8b-instruct","stream":true,"messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
+```
+
 ## Notes
 
 - Workers AI is bound in `wrangler.jsonc` as `AI`.
 - Default model is `@cf/meta/llama-3.1-8b-instruct` if `model` is not provided.
 - `AUTH_TOKEN` must be configured, or requests will return `500`.
+- `stream: true` is supported with OpenAI-style SSE chunks.
