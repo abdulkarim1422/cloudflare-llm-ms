@@ -1,6 +1,6 @@
 # Cloudflare Workers AI LLM Worker
 
-This Worker exposes a serverless LLM endpoint using Cloudflare Workers AI.
+This Worker exposes an OpenAI-compatible API on Cloudflare Workers AI, so it can be used directly from AnythingLLM Desktop.
 
 ## Auth token setup (required)
 
@@ -41,13 +41,30 @@ npm run deploy
 
 ## Endpoint
 
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+
+Legacy aliases (also supported):
+
 - `POST /chat`
+- `POST /chat/completions`
+
+## AnythingLLM Desktop setup
+
+In AnythingLLM Desktop, use the OpenAI-compatible provider and configure:
+
+- **Base URL**: `https://<your-worker-subdomain>.workers.dev/v1`
+- **API Key**: your `AUTH_TOKEN` value
+- **Model**: `@cf/meta/llama-3.1-8b-instruct`
+
+AnythingLLM will call `/models` and `/chat/completions` under this base URL.
 
 Request body (prompt style):
 
 ```json
 {
-	"prompt": "Write a short haiku about edge computing"
+	"model": "@cf/meta/llama-3.1-8b-instruct",
+	"messages": [{ "role": "user", "content": "Write a short haiku about edge computing" }]
 }
 ```
 
@@ -66,10 +83,10 @@ Request body (full messages style):
 Example curl:
 
 ```txt
-curl -X POST http://127.0.0.1:8787/chat \
+curl -X POST http://127.0.0.1:8787/v1/chat/completions \
 	-H 'authorization: Bearer your-local-token' \
 	-H 'content-type: application/json' \
-	-d '{"prompt":"Write a short haiku about edge computing"}'
+	-d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
 ```
 
 ## Notes
