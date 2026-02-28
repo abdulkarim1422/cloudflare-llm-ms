@@ -41,8 +41,7 @@ function sseData(payload: unknown) {
 
 function extractTextCandidates(value: unknown): string[] {
   if (typeof value === 'string') {
-    const text = value.trim()
-    return text ? [text] : []
+    return value.length > 0 ? [value] : []
   }
 
   if (Array.isArray(value)) {
@@ -57,6 +56,53 @@ function extractTextCandidates(value: unknown): string[] {
   }
 
   return []
+}
+
+function extractDeltaText(value: unknown): string[] {
+  if (typeof value !== 'object' || value === null) return []
+
+  const obj = value as Record<string, unknown>
+  const out: string[] = []
+
+  if (typeof obj.response === 'string' && obj.response.length > 0) {
+    out.push(obj.response)
+  }
+
+  if (typeof obj.output_text === 'string' && obj.output_text.length > 0) {
+    out.push(obj.output_text)
+  }
+
+  if (typeof obj.text === 'string' && obj.text.length > 0) {
+    out.push(obj.text)
+  }
+
+  const delta = obj.delta
+  if (typeof delta === 'object' && delta !== null) {
+    const deltaObj = delta as Record<string, unknown>
+    if (typeof deltaObj.content === 'string' && deltaObj.content.length > 0) {
+      out.push(deltaObj.content)
+    }
+  }
+
+  const choices = obj.choices
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      if (typeof choice !== 'object' || choice === null) continue
+      const choiceObj = choice as Record<string, unknown>
+      const choiceDelta = choiceObj.delta
+      if (typeof choiceDelta === 'object' && choiceDelta !== null) {
+        const choiceDeltaObj = choiceDelta as Record<string, unknown>
+        if (typeof choiceDeltaObj.content === 'string' && choiceDeltaObj.content.length > 0) {
+          out.push(choiceDeltaObj.content)
+        }
+      }
+      if (typeof choiceObj.text === 'string' && choiceObj.text.length > 0) {
+        out.push(choiceObj.text)
+      }
+    }
+  }
+
+  return out
 }
 
 async function toOpenAiSseFromAiStream(params: {
@@ -110,11 +156,9 @@ async function toOpenAiSseFromAiStream(params: {
 
               try {
                 const parsed = JSON.parse(raw) as unknown
-                const texts = extractTextCandidates(parsed)
+                const texts = extractDeltaText(parsed)
                 if (texts.length > 0) {
                   texts.forEach(emitContent)
-                } else {
-                  emitContent(raw)
                 }
               } catch {
                 emitContent(raw)
