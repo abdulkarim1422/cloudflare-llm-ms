@@ -6,5 +6,8 @@
   "ai": {
     "binding": "AI",
     "remote": true
+  },
+  "vars": {
+    "AUTH_TOKEN":"xxxxxxxxxxxxx"
   }
 }

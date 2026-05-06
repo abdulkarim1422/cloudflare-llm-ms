@@ -18,6 +18,14 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Generate local wrangler config
+        run: |
+          jq_filter='del(.vars.AUTH_TOKEN)'
+
+          jq \
+            "$jq_filter" \
+            wrangler.jsonc > wrangler.local.jsonc
+
       - name: Deploy to Cloudflare Workers
         run: |
             npx wrangler deploy
