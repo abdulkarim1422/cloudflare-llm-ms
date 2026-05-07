@@ -247,17 +247,9 @@ function resolveModelId(rawModel: string | undefined): string {
   // Continue and some OpenAI-compatible clients can send placeholder model ids.
   if (model === 'local-model' || model === 'default') return DEFAULT_MODEL
 
-  if (SUPPORTED_MODELS.includes(model as (typeof SUPPORTED_MODELS)[number])) {
-    return model
-  }
-
+  // Allow unknown/new Cloudflare models not yet present in SUPPORTED_MODELS.
   if (model.startsWith('cf/')) {
-    const withAt = `@${model}`
-    if (SUPPORTED_MODELS.includes(withAt as (typeof SUPPORTED_MODELS)[number])) return withAt
-  }
-
-  if (model.startsWith('@cf/')) {
-    return model
+    return `@${model}`
   }
 
   return model
