@@ -527,6 +527,11 @@ function extractTextFromAiResult(result: Record<string, unknown>): string {
 }
 
 app.use('*', async (c, next) => {
+  if (c.req.path === '/api/version') {
+    await next()
+    return
+  }
+
   const configuredToken = c.env.AUTH_TOKEN
 
   if (!configuredToken) {
@@ -819,6 +824,12 @@ app.get('/api/tags', (c) => {
         quantization_level: 'unknown'
       }
     }))
+  })
+})
+
+app.get('/api/version', (c) => {
+  return c.json({
+    version: '0.5.7'
   })
 })
 
