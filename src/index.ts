@@ -45,6 +45,11 @@ type OllamaGenerateBody = {
   stream?: boolean
 }
 
+type OllamaShowBody = {
+  name?: string
+  model?: string
+}
+
 const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
 const SUPPORTED_MODELS = [
   '@cf/meta/llama-3.1-8b-instruct',
@@ -527,7 +532,7 @@ function extractTextFromAiResult(result: Record<string, unknown>): string {
 }
 
 app.use('*', async (c, next) => {
-  if (c.req.path === '/api/version') {
+  if (c.req.path === '/api/version' || c.req.path === '/api/tags' || c.req.path === '/api/show') {
     await next()
     return
   }
@@ -830,6 +835,36 @@ app.get('/api/tags', (c) => {
 app.get('/api/version', (c) => {
   return c.json({
     version: '0.6.4'
+  })
+})
+
+app.post('/api/show', async (c) => {
+  let body: OllamaShowBody = {}
+  try {
+    body = await c.req.json()
+  } catch {
+    // Some clients may send empty body; keep it permissive for discovery.
+  }
+
+  const raw = body.name ?? body.model
+  const model = resolveModelId(raw)
+
+  return c.json({
+    license: 'unknown',
+    modelfile: `FROM ${model}`,
+    parameters: '',
+    template: '',
+    details: {
+      parent_model: '',
+      format: 'remote',
+      family: 'cloudflare-workers-ai',
+      families: ['cloudflare-workers-ai'],
+      parameter_size: 'unknown',
+      quantization_level: 'unknown'
+    },
+    model_info: {},
+    capabilities: ['completion'],
+    modified_at: new Date(0).toISOString()
   })
 })
 
