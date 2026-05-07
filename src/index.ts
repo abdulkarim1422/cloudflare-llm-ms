@@ -14,6 +14,24 @@ type Bindings = {
   AUTH_TOKEN: string
 }
 
+type ChatCompletionsBody = {
+  model?: string
+  messages?: ChatMessage[]
+  stream?: boolean
+}
+
+type TextCompletionsBody = {
+  model?: string
+  prompt?: string | string[]
+  stream?: boolean
+}
+
+type ResponsesBody = {
+  model?: string
+  input?: string | Array<{ role?: string; content?: unknown }>
+  stream?: boolean
+}
+
 const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
 const SUPPORTED_MODELS = [
   '@cf/meta/llama-3.1-8b-instruct',
@@ -27,7 +45,8 @@ const SUPPORTED_MODELS = [
   '@cf/openai/gpt-oss-20b',
   '@cf/qwen/qwen3-30b-a3b-fp8',
   '@cf/mistral/mistral-small-3.1-24b-instruct',
-  '@cf/google/gemma-3-12b-it'
+  '@cf/google/gemma-3-12b-it',
+  '@cf/google/gemma-4-26b-a4b-it'
 ] as const
 type ErrorStatusCode = 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500
 
@@ -214,6 +233,66 @@ function createOpenAIError(message: string, status: ErrorStatusCode = 400) {
   }
 }
 
+function normalizeAuthToken(authHeader: string | undefined, apiKeyHeader: string | undefined): string {
+  if (authHeader?.startsWith('Bearer ')) {
+    return authHeader.slice(7).trim()
+  }
+  return apiKeyHeader?.trim() ?? ''
+}
+
+function toArrayPrompt(prompt: string | string[] | undefined): string {
+  if (typeof prompt === 'string') return prompt
+  if (Array.isArray(prompt)) {
+    return prompt.filter((part) => typeof part === 'string').join('\n')
+  }
+  return ''
+}
+
+function toMessagesFromResponsesInput(input: ResponsesBody['input']): ChatMessage[] {
+  if (typeof input === 'string') {
+    return [{ role: 'user', content: input }]
+  }
+
+  if (!Array.isArray(input)) return []
+
+  const normalized: ChatMessage[] = []
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue
+    const role = item.role
+    const content = item.content
+    if (
+      (role === 'system' || role === 'user' || role === 'assistant' || role === 'developer') &&
+      typeof content === 'string' &&
+      content.trim()
+    ) {
+      normalized.push({ role, content })
+      continue
+    }
+
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) => {
+          if (typeof part === 'string') return part
+          if (typeof part === 'object' && part !== null) {
+            const candidate = (part as Record<string, unknown>).text
+            if (typeof candidate === 'string') return candidate
+          }
+          return ''
+        })
+        .join('\n')
+        .trim()
+      if (
+        (role === 'system' || role === 'user' || role === 'assistant' || role === 'developer') &&
+        text
+      ) {
+        normalized.push({ role, content: text })
+      }
+    }
+  }
+
+  return normalized
+}
+
 function toNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value
   if (typeof value === 'string') {
@@ -321,8 +400,10 @@ app.use('*', async (c, next) => {
   }
 
   const authHeader = c.req.header('Authorization')
-  const isBearer = authHeader?.startsWith('Bearer ')
-  const requestToken = isBearer && authHeader ? authHeader.slice(7).trim() : ''
+  const requestToken = normalizeAuthToken(
+    authHeader,
+    c.req.header('x-api-key') ?? c.req.header('api-key')
+  )
 
   if (!requestToken || requestToken !== configuredToken) {
     return c.json({ error: 'Unauthorized' }, 401)
@@ -359,11 +440,7 @@ app.get('/models', (c) => {
 })
 
 app.post('/v1/chat/completions', async (c) => {
-  let body: {
-    model?: string
-    messages?: ChatMessage[]
-    stream?: boolean
-  }
+  let body: ChatCompletionsBody
 
   try {
     body = await c.req.json()
@@ -457,6 +534,122 @@ app.post('/v1/chat/completions', async (c) => {
         }
       ],
       usage
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Workers AI call failed.'
+    return c.json(
+      {
+        error: {
+          message,
+          type: 'server_error',
+          param: null,
+          code: null
+        }
+      },
+      500
+    )
+  }
+})
+
+app.post('/v1/completions', async (c) => {
+  let body: TextCompletionsBody
+
+  try {
+    body = await c.req.json()
+  } catch {
+    const error = createOpenAIError('Invalid JSON body.')
+    return c.json(error.body, error.status)
+  }
+
+  const prompt = toArrayPrompt(body.prompt).trim()
+  if (!prompt) {
+    const error = createOpenAIError('`prompt` must be a non-empty string or string array.')
+    return c.json(error.body, error.status)
+  }
+
+  const model = body.model ?? DEFAULT_MODEL
+  const requestId = `cmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+  try {
+    const result = await c.env.AI.run(model, {
+      messages: [{ role: 'user', content: prompt }]
+    })
+    const text = extractTextFromAiResult(result)
+    const usage = extractUsageFromAiResult(result)
+
+    return c.json({
+      id: requestId,
+      object: 'text_completion',
+      created: Math.floor(Date.now() / 1000),
+      model,
+      choices: [
+        {
+          text,
+          index: 0,
+          finish_reason: 'stop'
+        }
+      ],
+      usage
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Workers AI call failed.'
+    return c.json(
+      {
+        error: {
+          message,
+          type: 'server_error',
+          param: null,
+          code: null
+        }
+      },
+      500
+    )
+  }
+})
+
+app.post('/v1/responses', async (c) => {
+  let body: ResponsesBody
+
+  try {
+    body = await c.req.json()
+  } catch {
+    const error = createOpenAIError('Invalid JSON body.')
+    return c.json(error.body, error.status)
+  }
+
+  const model = body.model ?? DEFAULT_MODEL
+  const messages = toMessagesFromResponsesInput(body.input)
+  if (messages.length === 0) {
+    const error = createOpenAIError('`input` must include at least one text message.')
+    return c.json(error.body, error.status)
+  }
+
+  const responseId = `resp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
+  try {
+    const result = await c.env.AI.run(model, { messages })
+    const text = extractTextFromAiResult(result)
+    const usage = extractUsageFromAiResult(result)
+
+    return c.json({
+      id: responseId,
+      object: 'response',
+      created_at: Math.floor(Date.now() / 1000),
+      model,
+      output: [
+        {
+          id: `msg-${Math.random().toString(36).slice(2, 10)}`,
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text }]
+        }
+      ],
+      output_text: text,
+      usage: {
+        input_tokens: usage.prompt_tokens,
+        output_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens
+      }
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Workers AI call failed.'

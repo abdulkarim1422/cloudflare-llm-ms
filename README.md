@@ -1,12 +1,13 @@
 # Cloudflare Workers AI LLM Worker
 
-This Worker exposes an OpenAI-compatible API on Cloudflare Workers AI, so it can be used directly from AnythingLLM Desktop.
+This Worker exposes an OpenAI-compatible API on Cloudflare Workers AI, so it can be used directly from AnythingLLM Desktop and Continue.
 
 ## Auth token setup (required)
 
 All requests require:
 
 - `Authorization: Bearer <your-token>`
+- `x-api-key: <your-token>` (also supported for OpenAI-compatible clients)
 
 Set token in environment variable `AUTH_TOKEN`.
 
@@ -43,6 +44,8 @@ npm run deploy
 
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/completions`
+- `POST /v1/responses`
 
 Legacy aliases (also supported):
 
@@ -60,6 +63,21 @@ In AnythingLLM Desktop, use the OpenAI-compatible provider and configure:
 AnythingLLM will call `/models` and `/chat/completions` under this base URL.
 
 The Worker now advertises multiple Workers AI chat models via `/v1/models` (for example `@cf/meta/llama-3.1-70b-instruct`, `@cf/openai/gpt-oss-20b`, `@cf/qwen/qwen3-30b-a3b-fp8`, etc.).
+
+## Continue setup
+
+Continue can use this Worker via an OpenAI-compatible model/provider config.
+
+Use:
+
+- **Base URL**: `https://<your-worker-subdomain>.workers.dev/v1`
+- **API Key**: your `AUTH_TOKEN` value
+- **Model**: one of `GET /v1/models` (for example `@cf/meta/llama-3.1-8b-instruct`)
+
+Compatibility notes for Continue/OpenAI-style clients:
+
+- Auth headers supported: `Authorization: Bearer ...`, `x-api-key`, `api-key`
+- Request APIs supported: Chat Completions (`/v1/chat/completions`), Completions (`/v1/completions`), Responses (`/v1/responses`)
 
 Request body (prompt style):
 
