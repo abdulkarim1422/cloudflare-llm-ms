@@ -829,7 +829,7 @@ app.get('/api/tags', (c) => {
 
 app.get('/api/version', (c) => {
   return c.json({
-    version: '0.5.7'
+    version: '0.6.4'
   })
 })
 
