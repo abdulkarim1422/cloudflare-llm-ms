@@ -240,6 +240,29 @@ function normalizeAuthToken(authHeader: string | undefined, apiKeyHeader: string
   return apiKeyHeader?.trim() ?? ''
 }
 
+function resolveModelId(rawModel: string | undefined): string {
+  const model = rawModel?.trim()
+  if (!model) return DEFAULT_MODEL
+
+  // Continue and some OpenAI-compatible clients can send placeholder model ids.
+  if (model === 'local-model' || model === 'default') return DEFAULT_MODEL
+
+  if (SUPPORTED_MODELS.includes(model as (typeof SUPPORTED_MODELS)[number])) {
+    return model
+  }
+
+  if (model.startsWith('cf/')) {
+    const withAt = `@${model}`
+    if (SUPPORTED_MODELS.includes(withAt as (typeof SUPPORTED_MODELS)[number])) return withAt
+  }
+
+  if (model.startsWith('@cf/')) {
+    return model
+  }
+
+  return model
+}
+
 function toArrayPrompt(prompt: string | string[] | undefined): string {
   if (typeof prompt === 'string') return prompt
   if (Array.isArray(prompt)) {
@@ -449,7 +472,7 @@ app.post('/v1/chat/completions', async (c) => {
     return c.json(error.body, error.status)
   }
 
-  const model = body.model ?? DEFAULT_MODEL
+  const model = resolveModelId(body.model)
   const messages = Array.isArray(body.messages) ? body.messages : []
   const requestId = `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
@@ -567,7 +590,7 @@ app.post('/v1/completions', async (c) => {
     return c.json(error.body, error.status)
   }
 
-  const model = body.model ?? DEFAULT_MODEL
+  const model = resolveModelId(body.model)
   const requestId = `cmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
   try {
@@ -617,7 +640,7 @@ app.post('/v1/responses', async (c) => {
     return c.json(error.body, error.status)
   }
 
-  const model = body.model ?? DEFAULT_MODEL
+  const model = resolveModelId(body.model)
   const messages = toMessagesFromResponsesInput(body.input)
   if (messages.length === 0) {
     const error = createOpenAIError('`input` must include at least one text message.')
