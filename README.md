@@ -46,6 +46,9 @@ npm run deploy
 - `POST /v1/chat/completions`
 - `POST /v1/completions`
 - `POST /v1/responses`
+- `GET /api/tags` (Ollama-compatible)
+- `POST /api/chat` (Ollama-compatible)
+- `POST /api/generate` (Ollama-compatible)
 
 Legacy aliases (also supported):
 
@@ -79,12 +82,36 @@ Compatibility notes for Continue/OpenAI-style clients:
 - Auth headers supported: `Authorization: Bearer ...`, `x-api-key`, `api-key`
 - Request APIs supported: Chat Completions (`/v1/chat/completions`), Completions (`/v1/completions`), Responses (`/v1/responses`)
 
+## GitHub Copilot (custom OpenAI endpoint)
+
+When using a Copilot-compatible custom provider/openai endpoint setup, use:
+
+- **Base URL**: `https://<your-worker-subdomain>.workers.dev/v1`
+- **API Key / Token**: your `AUTH_TOKEN`
+- **Model**: a Workers AI model id (for example `@cf/google/gemma-4-26b-a4b-it`)
+
+Supported auth headers include `Authorization: Bearer ...`, `x-api-key`, and `api-key`.
+
+## Ollama-compatible local configuration
+
+This worker now exposes Ollama-style APIs so Ollama-compatible clients can use it:
+
+- `GET /api/tags`
+- `POST /api/chat`
+- `POST /api/generate`
+
+Use:
+
+- **Base URL**: `https://<your-worker-subdomain>.workers.dev`
+- **Model**: Workers AI model id (e.g. `@cf/meta/llama-3.1-8b-instruct`, `@cf/google/gemma-4-26b-a4b-it`, or newer models)
+- **Auth**: send your token via `Authorization: Bearer <AUTH_TOKEN>` (or `x-api-key`)
+
 Request body (prompt style):
 
 ```json
 {
-	"model": "@cf/meta/llama-3.1-8b-instruct",
-	"messages": [{ "role": "user", "content": "Write a short haiku about edge computing" }]
+  "model": "@cf/meta/llama-3.1-8b-instruct",
+  "messages": [{ "role": "user", "content": "Write a short haiku about edge computing" }]
 }
 ```
 
@@ -92,11 +119,11 @@ Request body (full messages style):
 
 ```json
 {
-	"model": "@cf/meta/llama-3.1-8b-instruct",
-	"messages": [
-		{ "role": "system", "content": "You are concise." },
-		{ "role": "user", "content": "Explain Workers AI in one sentence." }
-	]
+  "model": "@cf/meta/llama-3.1-8b-instruct",
+  "messages": [
+    { "role": "system", "content": "You are concise." },
+    { "role": "user", "content": "Explain Workers AI in one sentence." }
+  ]
 }
 ```
 
@@ -104,18 +131,18 @@ Example curl:
 
 ```txt
 curl -X POST http://127.0.0.1:8787/v1/chat/completions \
-	-H 'authorization: Bearer your-local-token' \
-	-H 'content-type: application/json' \
-	-d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
+  -H 'authorization: Bearer your-local-token' \
+  -H 'content-type: application/json' \
+  -d '{"model":"@cf/meta/llama-3.1-8b-instruct","messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
 ```
 
 Example streaming curl (`stream: true`):
 
 ```txt
 curl -N -X POST http://127.0.0.1:8787/v1/chat/completions \
-	-H 'authorization: Bearer your-local-token' \
-	-H 'content-type: application/json' \
-	-d '{"model":"@cf/meta/llama-3.1-8b-instruct","stream":true,"messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
+  -H 'authorization: Bearer your-local-token' \
+  -H 'content-type: application/json' \
+  -d '{"model":"@cf/meta/llama-3.1-8b-instruct","stream":true,"messages":[{"role":"user","content":"Write a short haiku about edge computing"}]}'
 ```
 
 ## Notes

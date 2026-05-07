@@ -32,6 +32,19 @@ type ResponsesBody = {
   stream?: boolean
 }
 
+type OllamaChatBody = {
+  model?: string
+  messages?: ChatMessage[]
+  stream?: boolean
+}
+
+type OllamaGenerateBody = {
+  model?: string
+  prompt?: string
+  system?: string
+  stream?: boolean
+}
+
 const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
 const SUPPORTED_MODELS = [
   '@cf/meta/llama-3.1-8b-instruct',
@@ -263,6 +276,112 @@ function toArrayPrompt(prompt: string | string[] | undefined): string {
   return ''
 }
 
+function createOllamaChatChunk(model: string, content: string, done: boolean) {
+  return {
+    model,
+    created_at: new Date().toISOString(),
+    message: {
+      role: 'assistant',
+      content
+    },
+    done
+  }
+}
+
+function createOllamaGenerateChunk(model: string, content: string, done: boolean) {
+  return {
+    model,
+    created_at: new Date().toISOString(),
+    response: content,
+    done
+  }
+}
+
+async function toOllamaNdjsonFromAiStream(params: {
+  aiStream: ReadableStream
+  model: string
+  mode: 'chat' | 'generate'
+}): Promise<ReadableStream> {
+  const { aiStream, model, mode } = params
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  const reader = aiStream.getReader()
+
+  return new ReadableStream({
+    async start(controller) {
+      let buffer = ''
+      const emit = (text: string) => {
+        if (!text) return
+        const payload =
+          mode === 'chat'
+            ? createOllamaChatChunk(model, text, false)
+            : createOllamaGenerateChunk(model, text, false)
+        controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`))
+      }
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          if (typeof value === 'string') {
+            emit(value)
+            continue
+          }
+
+          buffer += decoder.decode(value as Uint8Array, { stream: true })
+          const parts = buffer.split(/\r?\n\r?\n/)
+          buffer = parts.pop() ?? ''
+
+          for (const part of parts) {
+            const lines = part
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => line.startsWith('data:'))
+
+            if (lines.length === 0) {
+              const fallbacks = extractTextCandidates(part)
+              fallbacks.forEach(emit)
+              continue
+            }
+
+            for (const line of lines) {
+              const raw = line.slice(5).trim()
+              if (!raw || raw === '[DONE]') continue
+
+              try {
+                const parsed = JSON.parse(raw) as unknown
+                const texts = extractDeltaText(parsed)
+                if (texts.length > 0) {
+                  texts.forEach(emit)
+                }
+              } catch {
+                emit(raw)
+              }
+            }
+          }
+        }
+
+        if (buffer.trim()) {
+          const texts = extractTextCandidates(buffer)
+          texts.forEach(emit)
+        }
+
+        const donePayload =
+          mode === 'chat'
+            ? createOllamaChatChunk(model, '', true)
+            : createOllamaGenerateChunk(model, '', true)
+        controller.enqueue(encoder.encode(`${JSON.stringify(donePayload)}\n`))
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      } finally {
+        reader.releaseLock()
+      }
+    }
+  })
+}
+
 function toMessagesFromResponsesInput(input: ResponsesBody['input']): ChatMessage[] {
   if (typeof input === 'string') {
     return [{ role: 'user', content: input }]
@@ -433,7 +552,10 @@ app.get('/', (c) => {
     status: 'ok',
     endpoints: {
       models: 'GET /v1/models',
-      chatCompletions: 'POST /v1/chat/completions'
+      chatCompletions: 'POST /v1/chat/completions',
+      ollamaChat: 'POST /api/chat',
+      ollamaGenerate: 'POST /api/generate',
+      ollamaTags: 'GET /api/tags'
     }
   })
 })
@@ -679,6 +801,129 @@ app.post('/v1/responses', async (c) => {
       },
       500
     )
+  }
+})
+
+app.get('/api/tags', (c) => {
+  return c.json({
+    models: SUPPORTED_MODELS.map((modelId) => ({
+      name: modelId,
+      model: modelId,
+      modified_at: new Date(0).toISOString(),
+      size: 0,
+      digest: '',
+      details: {
+        family: 'cloudflare-workers-ai',
+        format: 'remote',
+        parameter_size: 'unknown',
+        quantization_level: 'unknown'
+      }
+    }))
+  })
+})
+
+app.post('/api/chat', async (c) => {
+  let body: OllamaChatBody
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body.' }, 400)
+  }
+
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  if (messages.length === 0) {
+    return c.json({ error: '`messages` must be a non-empty array.' }, 400)
+  }
+
+  const model = resolveModelId(body.model)
+
+  try {
+    if (body.stream !== false) {
+      const streamedResult = await c.env.AI.run(model, { messages, stream: true })
+      let aiStream: ReadableStream | null = null
+      if (streamedResult instanceof ReadableStream) {
+        aiStream = streamedResult
+      } else if (
+        typeof streamedResult === 'object' &&
+        streamedResult !== null &&
+        (streamedResult as Record<string, unknown>).response instanceof ReadableStream
+      ) {
+        aiStream = (streamedResult as { response: ReadableStream }).response
+      }
+
+      if (aiStream) {
+        const ollamaStream = await toOllamaNdjsonFromAiStream({ aiStream, model, mode: 'chat' })
+        return new Response(ollamaStream, {
+          headers: {
+            'content-type': 'application/x-ndjson; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive'
+          }
+        })
+      }
+    }
+
+    const result = await c.env.AI.run(model, { messages })
+    const content = extractTextFromAiResult(result)
+    return c.json(createOllamaChatChunk(model, content, true))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Workers AI call failed.'
+    return c.json({ error: message }, 500)
+  }
+})
+
+app.post('/api/generate', async (c) => {
+  let body: OllamaGenerateBody
+  try {
+    body = await c.req.json()
+  } catch {
+    return c.json({ error: 'Invalid JSON body.' }, 400)
+  }
+
+  const prompt = body.prompt?.trim() ?? ''
+  if (!prompt) {
+    return c.json({ error: '`prompt` must be a non-empty string.' }, 400)
+  }
+
+  const model = resolveModelId(body.model)
+  const messages: ChatMessage[] = []
+  if (body.system?.trim()) {
+    messages.push({ role: 'system', content: body.system.trim() })
+  }
+  messages.push({ role: 'user', content: prompt })
+
+  try {
+    if (body.stream !== false) {
+      const streamedResult = await c.env.AI.run(model, { messages, stream: true })
+      let aiStream: ReadableStream | null = null
+      if (streamedResult instanceof ReadableStream) {
+        aiStream = streamedResult
+      } else if (
+        typeof streamedResult === 'object' &&
+        streamedResult !== null &&
+        (streamedResult as Record<string, unknown>).response instanceof ReadableStream
+      ) {
+        aiStream = (streamedResult as { response: ReadableStream }).response
+      }
+
+      if (aiStream) {
+        const ollamaStream = await toOllamaNdjsonFromAiStream({ aiStream, model, mode: 'generate' })
+        return new Response(ollamaStream, {
+          headers: {
+            'content-type': 'application/x-ndjson; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive'
+          }
+        })
+      }
+    }
+
+    const result = await c.env.AI.run(model, { messages })
+    const content = extractTextFromAiResult(result)
+    return c.json(createOllamaGenerateChunk(model, content, true))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Workers AI call failed.'
+    return c.json({ error: message }, 500)
   }
 })
 
