@@ -248,7 +248,7 @@ function resolveModelId(rawModel: string | undefined): string {
   if (model === 'local-model' || model === 'default') return DEFAULT_MODEL
 
   // Allow unknown/new Cloudflare models not yet present in SUPPORTED_MODELS.
-  if (model.startsWith('cf/')) {
+  if (model.startsWith('cf/') || model.startsWith('hf/')) {
     return `@${model}`
   }
 
